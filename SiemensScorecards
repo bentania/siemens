@@ -1,0 +1,336 @@
+import glob
+import logging
+import os
+import re
+import traceback
+from datetime import datetime, timedelta
+import gspread
+import pandas as pd
+from openpyxl import load_workbook
+#import tkinter as tk
+from tkinter import simpledialog
+#from tkinter import filedialog
+from tkinter import messagebox
+from PIL import Image, ImageTk  # PIL library is needed to work with images
+#import threading
+
+
+def show_loading_animation():
+    loading_root = tk.Toplevel()
+    loading_root.title("Loading...")
+
+    # Load and display the animated GIF
+    image = Image.open(r'C:\Users\pbento\PycharmProjects\pythonProject\sisifus.gif')
+    photo = ImageTk.PhotoImage(image)
+    label = tk.Label(loading_root, image=photo)
+    label.photo = photo  # To prevent the photo from being garbage collected
+    label.pack()
+
+    loading_root.after(300000, loading_root.destroy)  # Display the GIF for 3 seconds
+
+# Verificar se a pasta existe, se não existir criá-la
+path = "c:\\SiemensScorecards"
+# Check whether the specified path exists or not
+isExist = os.path.exists(path)
+if not isExist:
+
+   # Create a new directory because it does not exist
+   os.makedirs(path)
+   print("The new directory is created!")
+
+import tkinter as tk
+from datetime import datetime
+
+def update_clock():
+    current_time = datetime.now().strftime("%H:%M:%S")
+    clock_label.config(text=current_time)
+    clock_label.after(1000, update_clock)  # Update every second (1000 ms)
+
+def close_loading_window():
+    loading_root.destroy()
+
+google_credentials_path = r'C:\SiemensScorecards\API_Credentials\apicredentials-393909-941d4a10fbcf.json'
+spreadsheet_url = 'https://docs.google.com/spreadsheets/d/1AKfOCYXE88dXSGk5dgTXS4wYPPOzgi1Pq1Y7Yz_gT1g/edit#gid' \
+                  '=1515246424'
+
+gc = gspread.service_account(filename=google_credentials_path)
+spreadsheet = gc.open_by_url(spreadsheet_url)
+
+worksheet_names = [file.title for file in spreadsheet.worksheets() if re.search(r'SISM.*\d{6}', file.title)]
+
+
+def convert_excel_date(excel_date):
+    if excel_date:
+        return (datetime(1900, 1, 1) + timedelta(days=int(excel_date) - 2)).strftime("%d/%m/%Y")
+    else:
+        return ""
+
+
+def convert_language_to_locale(idioma):
+    if idioma == "ES":
+        return "es-ES"
+    elif idioma == "KO":
+        return "kr-KR"
+    elif idioma == "CZ":
+        return "cs-CZ"
+    else:
+        return ""
+
+
+def calculate_content_type(tarefa):
+    if tarefa.startswith("email"):
+        return "E-mails"
+    elif "_INF_" in tarefa:
+        return "Infographics"
+    elif "_WP_" in tarefa:
+        return "Whitepapers"
+    elif "_EBK_" in tarefa:
+        return "eBooks"
+    elif tarefa.startswith("social post"):
+        return "Social posts"
+    elif "_VID_" in tarefa:
+        return "Videos"
+    elif tarefa.startswith("LP"):
+        return "Landing pages"
+    elif "_WBNR_" in tarefa:
+        return "Webinars"
+    else:
+        return ""
+
+
+def is_number(value):
+    try:
+        int(value)
+        return True
+    except ValueError:
+        return False
+
+
+data = []
+
+for worksheet_name in worksheet_names:
+    worksheet = spreadsheet.worksheet(worksheet_name)
+    all_data = worksheet.get_all_values(value_render_option='UNFORMATTED_VALUE')
+
+    project_name = ''.join(filter(str.isdigit, worksheet.title))[:6]
+
+    for idx, row in enumerate(all_data):
+        if idx == 0:
+            continue
+
+        task_number_str, task_name, ho_date_serial, _, language, *word_counts = row
+
+        if isinstance(task_number_str, str):
+            task_number = task_number_str if task_number_str.isdigit() else None
+        else:
+            task_number = None
+
+        if task_number is not None and language in ["ES", "KO", "CZ"]:
+            locale = convert_language_to_locale(language)
+            ho_date_str = convert_excel_date(ho_date_serial)
+            content_type = calculate_content_type(task_name)
+
+            # Extract the first 6 items from the word_counts list
+            word_counts_range = word_counts[:6]
+
+            # Filter out non-integer values and calculate total_word_count
+            total_word_count = sum(
+                [int(word_count) if str(word_count).strip().isdigit() else 0 for word_count in word_counts[:6]])
+
+            if locale == "kr-KR":
+                if total_word_count < 650:
+                    review_scope = "Full Review"
+                else:
+                    review_scope = "20% Review"
+            elif locale in ["es-ES", "cs-CZ"]:
+                review_scope = "Full Review"
+            else:
+                review_scope = "Full Review"
+
+            data.append((project_name, task_number_str, locale, ho_date_str, task_name, content_type, total_word_count,
+                         review_scope))
+
+df = pd.DataFrame(data,
+                  columns=['Project', 'Task', 'Locale', 'Date', 'Task Name', 'Content', 'Wordcount', 'Review Scope'])
+df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
+df_sorted = df.sort_values(by='Date', ascending=False)
+
+# print('Number of tasks in Google Sheets: ',len(df))
+def extract_project_number(filename):
+    digits = ""
+    for char in filename:
+        if char.isdigit():
+            digits += char
+            if len(digits) == 6:
+                return digits
+        else:
+            digits = ""
+    return ""
+
+def extract_excel_data(caminho_pastas_excel):
+    dados_extraidos = []
+
+    excel_files = glob.glob(os.path.join(caminho_pastas_excel, '**', '*.xls*'), recursive=True) + \
+                  glob.glob(os.path.join(caminho_pastas_excel, '**', '*.xlsx*'), recursive=True)
+
+    # print("Total Excel Files:", len(excel_files))
+    # for excel_path in excel_files:
+    #    print("Processing:", excel_path)
+
+    for excel_path in excel_files:
+        if os.path.basename(excel_path).startswith("~$"):
+            continue
+
+        try:
+            workbook = load_workbook(excel_path, data_only=True)
+            sheet = workbook.worksheets[1]
+            first_sheet = workbook.worksheets[0]
+            excel_filename = excel_path.split(os.path.sep)[-1]  # Get the file name from the full path
+
+            project = extract_project_number(excel_filename)
+
+            filename_parts = re.match(r'([A-Za-z]{2}[-_][A-Za-z0-9]+)_([A-Za-z0-9]+)_', excel_filename)
+            if filename_parts:
+                cod_idioma = filename_parts.group(1).replace('_', '-')
+                cod_idioma_parts = cod_idioma.split('-')
+                cod_idioma = f"{cod_idioma_parts[0]}-{cod_idioma_parts[1].upper()}"
+                task = filename_parts.group(2)
+            else:
+                cod_idioma = ""
+                task = ""
+
+            extracted_row = {
+                "Project": project,
+                "Locale": cod_idioma,
+                "Task": task,
+                "Accuracy - Minor": sheet['C6'].value,
+                "Accuracy - Major": sheet['D6'].value,
+                "Grammar - Minor": sheet['C7'].value,
+                "Grammar - Major": sheet['D7'].value,
+                "Style - Minor": sheet['C10'].value,
+                "Style - Major": sheet['D10'].value,
+                "Terminology - Minor": sheet['C11'].value,
+                "Terminology - Major": sheet['D11'].value,
+                "Total - Minor": sheet['C12'].value,
+                "Total - Major": sheet['D12'].value,
+                "Pass/Fail": first_sheet['B5'].value
+            }
+
+            # Handling different date formats
+            date_match = re.search(r'(\d{4}[-_]\d{2})', excel_filename)
+            if date_match:
+                extracted_row["Date"] = date_match.group(1).replace('_', '-')  # Convert underscores to dashes
+            else:
+                extracted_row["Date"] = ""  # Handle cases where the date format is not found
+
+            dados_extraidos.append(extracted_row)
+
+        except Exception as e:
+
+            logging.error(f"Error processing {excel_path}: {e}")
+
+            logging.debug(traceback.format_exc())  # Print full traceback
+
+    return dados_extraidos
+
+
+def filter_folders_by_keywords(folder_path, keywords):
+    selected_folders = []
+
+    for folder_name in os.listdir(folder_path):
+        if any(keyword in folder_name for keyword in keywords):
+            folder_full_path = os.path.join(folder_path, folder_name)
+            if os.path.isdir(folder_full_path):
+                selected_folders.append(folder_full_path)
+
+    return selected_folders
+
+
+# excel_folder_path = r'\\10.0.0.35\REFS\01_Strategic_groups\AVA\Siemens\04_Client reference\07_Scorecards'
+excel_folder_path = r'C:\SiemensScorecards'
+keywords = ["Scorecards"]
+selected_folders = filter_folders_by_keywords(excel_folder_path, keywords)
+
+for folder in selected_folders:
+    extracted_data = extract_excel_data(folder)
+
+df_excel = pd.DataFrame(extracted_data,
+                        columns=['Project', 'Task', 'Locale', 'Accuracy - Minor', 'Accuracy - Major', 'Grammar - Minor',
+                                 'Grammar - Major', 'Style - Minor', 'Style - Major', 'Terminology - Minor',
+                                 'Terminology - Major', 'Total - Minor', 'Total - Major', 'Pass/Fail'])
+
+# print('Number of Excel Scorecards: ',len(df_excel))
+
+result_df = df_sorted.merge(df_excel, on=['Project', 'Task', 'Locale'], how='left')
+result_df = result_df.drop_duplicates(subset=['Project', 'Task', 'Locale'])
+#result_df.to_csv('C:\\SiemensScorecards\\extracted_data.csv', index=True)
+# print("Data extracted and saved to 'extracted_data.csv'")
+
+# Inside the Tkinter filtering functions
+def filter_by_year():
+    global df_filtered
+    filter_year = simpledialog.askinteger("Filter by Year", "Enter the year to filter by:")
+    if filter_year:
+        df_filtered = result_df[result_df['Date'].dt.year == filter_year]
+        filename_suffix = f"{filter_year}"
+        generate_and_export_csv(df_filtered, filename_suffix)
+
+def filter_by_quarter():
+    global df_filtered
+    filter_year = simpledialog.askinteger("Filter by Year/Quarter", "Enter the year to filter by:")
+    filter_quarter = simpledialog.askinteger("Filter by Quarter", "Enter the quarter to filter by (1/2/3/4):")
+    if filter_year and filter_quarter:
+        df_filtered = result_df[
+            (result_df['Date'].dt.year == filter_year) & (result_df['Date'].dt.quarter == filter_quarter)]
+        filename_suffix = f"{filter_year}_Q{filter_quarter}"
+        generate_and_export_csv(df_filtered, filename_suffix)
+
+def filter_by_month():
+    global df_filtered
+    filter_year = simpledialog.askinteger("Filter by Year", "Enter the year to filter by:")
+    filter_month = simpledialog.askinteger("Filter by Month", "Enter the month to filter by (1-12):")
+    if filter_year and 1 <= filter_month <= 12:
+        df_filtered = result_df[
+            (result_df['Date'].dt.year == filter_year) & (result_df['Date'].dt.month == filter_month)]
+        filename_suffix = f"{filter_year}_{filter_month:02d}"  # Adding zero-padding to month
+        generate_and_export_csv(df_filtered, filename_suffix)
+
+
+def export_filtered_data(filtered_data, filename):
+    filtered_df.to_csv(filename, index=False)
+    messagebox.showinfo("Export Complete", f"Filtered data exported to '{filename}'")
+
+def generate_and_export_csv(dataframe, filename_suffix):
+    current_date = datetime.now().strftime("%d%m%Y")
+    current_time = datetime.now().strftime("%H%M")
+    csv_filename = os.path.join(path, f"Siemens_ScoreCards_{filename_suffix}_{current_date}_{current_time}.csv")
+    dataframe.to_csv(csv_filename, index=False)
+    messagebox.showinfo("Export Complete", f"Filtered data exported to '{csv_filename}'")
+def exit_program():
+    if messagebox.askyesno("Exit Program", "Oh no! You're leaving... Come back soon!\nAre you sure that you want to close this app?"):
+        root.destroy()
+
+
+# Create the Tkinter GUI window
+root = tk.Tk()
+root.title("Siemens Scorecards Filter Options v1010_2")
+root.geometry("600x300")
+
+# Create buttons for filtering options
+filter_by_year_button = tk.Button(root, text="Filter by Year", command=filter_by_year)
+filter_by_year_button.pack(pady=10)
+filter_by_year_button.focus_set()
+
+filter_by_quarter_button = tk.Button(root, text="Filter by Quarter", command=filter_by_quarter)
+filter_by_quarter_button.pack(pady=20)
+filter_by_quarter_button.focus_set()
+
+filter_by_month_button = tk.Button(root, text="Filter by Month", command=filter_by_month)
+filter_by_month_button.pack(pady=30)
+filter_by_month_button.focus_set()
+
+exit_button = tk.Button(root, text="Exit", command=exit_program)
+exit_button.pack(pady=40)
+
+# Start the Tkinter event loop
+root.mainloop()
